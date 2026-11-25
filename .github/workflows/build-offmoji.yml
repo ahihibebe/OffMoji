@@ -1,0 +1,68 @@
+name: Build OffMoji APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'OffMoji.zip'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Giải nén OffMoji.zip
+        run: |
+          rm -rf work && mkdir work
+          unzip -q -o OffMoji.zip -d work
+          SET=$(find work -name settings.gradle | head -1)
+          if [ -z "$SET" ]; then echo "Không thấy settings.gradle trong OffMoji.zip"; exit 1; fi
+          ROOT="$(cd "$(dirname "$SET")" && pwd)"
+          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
+          VERSION=$(grep -oP 'versionName\s+"\K[^"]+' "$ROOT/app/build.gradle" | head -1)
+          APPNAME=$(grep -oP '<string name="app_name">\K[^<]+' "$ROOT/app/src/main/res/values/strings.xml" | head -1)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "APPNAME=$APPNAME" >> "$GITHUB_ENV"
+          echo "Tên app: $APPNAME - phiên bản: $VERSION"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build APK release
+        run: |
+          cd "$ROOT"
+          gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Đổi tên APK theo tên app + phiên bản
+        run: |
+          OUT="${APPNAME}-v${VERSION}.apk"
+          cp "$ROOT/app/build/outputs/apk/release/app-release.apk" "$OUT"
+          echo "APK_FILE=$OUT" >> "$GITHUB_ENV"
+          ls -la "$OUT"
+
+      - name: Đăng lên Releases (hiện ở trang chủ repo)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${VERSION}"
+          # build lại cùng phiên bản thì thay bản cũ
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" "$APK_FILE" \
+            --title "${APPNAME} v${VERSION}" \
+            --notes "Bản build tự động. Tải file **${APK_FILE}** bên dưới rồi cài lên điện thoại." \
+            --latest
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APPNAME }}-v${{ env.VERSION }}
+          path: ${{ env.APK_FILE }}
